@@ -1,0 +1,26 @@
+name: Deploy to Astro
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  ASTRO_API_TOKEN: ${{ secrets.ASTRO_API_TOKEN }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify deployment credentials
+        run: test -n "$ASTRO_API_TOKEN"
+      - name: Parse and deploy Astro project
+        uses: astronomer/deploy-action@v0.16.0
+        with:
+          deployment-id: cmuiehb7y3rk701jr0k2e5t7a
+          deploy-type: infer
+          parse: true
+          description: Deployed from GitHub commit ${{ github.sha }}

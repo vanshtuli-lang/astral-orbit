@@ -13,6 +13,7 @@ airflow.cfg
 airflow.db
 .astro/*.local.yml
 .astro/*.local.yaml
+.astro/*.lock
 
 **/.astro/dbt_metadata.json
 **/.astro/manifest.slim.json
