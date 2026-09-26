@@ -17,8 +17,9 @@ under ``jefferies_settlement/`` in the ``inbound`` container. Airflow retrieves
 the ``sftp_claims`` connection from Azure Key Vault, so no SFTP credential is
 stored in this repository. Airflow's Grid view provides the task audit trail.
 
-Prerequisite: create ``SETTLEMENT_STAGE_DEMO`` and ``SETTLEMENTS_DEMO`` once in
-the ``JEFFERIES_DEMO`` Oracle schema before running this DAG.
+Prerequisite: create ``JEFFERIES_SETTLEMENT_STAGE`` and
+``JEFFERIES_SETTLEMENTS`` once in the existing staging schema used by the
+``oracle_jefferies_settlement`` connection.
 """
 
 import csv
@@ -100,10 +101,10 @@ def jefferies_post_market_settlement_etl():
 
         connection = get_oracle_hook().get_conn()
         cursor = connection.cursor()
-        cursor.execute("DELETE FROM SETTLEMENT_STAGE_DEMO")
+        cursor.execute("DELETE FROM JEFFERIES_SETTLEMENT_STAGE")
         cursor.executemany(
             """
-            INSERT INTO SETTLEMENT_STAGE_DEMO (
+            INSERT INTO JEFFERIES_SETTLEMENT_STAGE (
                 RUN_ID, TRADE_ID, ACCOUNT_ID, QUANTITY, PRICE, NOTIONAL
             ) VALUES (:1, :2, :3, :4, :5, NULL)
             """,
@@ -127,7 +128,7 @@ def jefferies_post_market_settlement_etl():
         connection = get_oracle_hook().get_conn()
         cursor = connection.cursor()
         cursor.execute(
-            "UPDATE SETTLEMENT_STAGE_DEMO SET NOTIONAL = QUANTITY * PRICE"
+            "UPDATE JEFFERIES_SETTLEMENT_STAGE SET NOTIONAL = QUANTITY * PRICE"
         )
         connection.commit()
         print(f"Calculated notional for {staged_count} staged rows")
@@ -152,14 +153,14 @@ def jefferies_post_market_settlement_etl():
         """Replace the demo settlement table with the transformed rows."""
         connection = get_oracle_hook().get_conn()
         cursor = connection.cursor()
-        cursor.execute("DELETE FROM SETTLEMENTS_DEMO")
+        cursor.execute("DELETE FROM JEFFERIES_SETTLEMENTS")
         cursor.execute(
             """
-            INSERT INTO SETTLEMENTS_DEMO (
+            INSERT INTO JEFFERIES_SETTLEMENTS (
                 TRADE_ID, ACCOUNT_ID, QUANTITY, PRICE, NOTIONAL, LOADED_AT
             )
             SELECT TRADE_ID, ACCOUNT_ID, QUANTITY, PRICE, NOTIONAL, SYSTIMESTAMP
-            FROM SETTLEMENT_STAGE_DEMO
+            FROM JEFFERIES_SETTLEMENT_STAGE
             """
         )
         loaded_count = cursor.rowcount
@@ -173,11 +174,11 @@ def jefferies_post_market_settlement_etl():
         connection = get_oracle_hook().get_conn()
         cursor = connection.cursor()
         cursor.execute(
-            "SELECT COUNT(*), NVL(SUM(NOTIONAL), 0) FROM SETTLEMENT_STAGE_DEMO"
+            "SELECT COUNT(*), NVL(SUM(NOTIONAL), 0) FROM JEFFERIES_SETTLEMENT_STAGE"
         )
         stage_count, stage_total = cursor.fetchone()
         cursor.execute(
-            "SELECT COUNT(*), NVL(SUM(NOTIONAL), 0) FROM SETTLEMENTS_DEMO"
+            "SELECT COUNT(*), NVL(SUM(NOTIONAL), 0) FROM JEFFERIES_SETTLEMENTS"
         )
         final_count, final_total = cursor.fetchone()
 
