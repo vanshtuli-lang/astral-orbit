@@ -14,6 +14,9 @@ Overall flow:
 The DAG runs only when triggered. An operator can override ``input_key`` in the
 trigger form to process a corrected S3 file immediately, without changing code.
 Airflow's Grid view provides the per-task state and execution audit trail.
+
+Prerequisite: create ``SETTLEMENT_STAGE_DEMO`` and ``SETTLEMENTS_DEMO`` once in
+the ``JEFFERIES_DEMO`` Oracle schema before running this DAG.
 """
 
 import csv
@@ -64,42 +67,6 @@ def read_s3_text(bucket: str, key: str) -> str:
     tags=["jefferies", "settlement", "demo", "hitl"],
 )
 def jefferies_post_market_settlement_etl():
-    @task
-    def create_demo_tables() -> None:
-        """Create two intentionally simple tables in JEFFERIES_DEMO."""
-        table_sql = {
-            "SETTLEMENT_STAGE_DEMO": """
-                CREATE TABLE SETTLEMENT_STAGE_DEMO (
-                    RUN_ID VARCHAR2(250),
-                    TRADE_ID VARCHAR2(50),
-                    ACCOUNT_ID VARCHAR2(50),
-                    QUANTITY NUMBER,
-                    PRICE NUMBER,
-                    NOTIONAL NUMBER
-                )
-            """,
-            "SETTLEMENTS_DEMO": """
-                CREATE TABLE SETTLEMENTS_DEMO (
-                    TRADE_ID VARCHAR2(50),
-                    ACCOUNT_ID VARCHAR2(50),
-                    QUANTITY NUMBER,
-                    PRICE NUMBER,
-                    NOTIONAL NUMBER,
-                    LOADED_AT TIMESTAMP
-                )
-            """,
-        }
-
-        connection = get_oracle_hook().get_conn()
-        cursor = connection.cursor()
-        cursor.execute("SELECT TABLE_NAME FROM USER_TABLES")
-        existing_tables = {row[0] for row in cursor.fetchall()}
-
-        for table_name, sql in table_sql.items():
-            if table_name not in existing_tables:
-                cursor.execute(sql)
-        connection.commit()
-
     # The sensor waits for the one self-contained CSV file. Deferrable mode
     # means it does not hold a worker while it waits.
     wait_for_files = S3KeySensor(
@@ -241,7 +208,6 @@ def jefferies_post_market_settlement_etl():
             f"total notional {reconciliation['total_notional']}"
         )
 
-    tables_ready = create_demo_tables()
     validation = validate_file(
         "{{ var.value.jefferies_settlement_bucket }}",
         "{{ params.input_key }}",
@@ -254,7 +220,7 @@ def jefferies_post_market_settlement_etl():
     published = publish_completion(complete)
 
     # These explicit dependencies make the demo read like the batch plan.
-    tables_ready >> wait_for_files >> validation
+    wait_for_files >> validation
     transformed >> release_or_ice >> loaded
     reconciled >> complete >> published
 
