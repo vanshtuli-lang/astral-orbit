@@ -1,4 +1,20 @@
-"""A small, demo-friendly post-market settlement workflow."""
+"""Jefferies post-market settlement demo.
+
+Overall flow:
+
+1. Wait for one settlement CSV to arrive in S3.
+2. Validate that the CSV has rows and the expected columns.
+3. Copy the rows into a simple Oracle staging table.
+4. Transform each row by calculating ``notional = quantity * price``.
+5. Pause for an operator decision in Airflow's Required Actions UI.
+6. On Approve, load the final settlement table; on Reject, ice the stream.
+7. Reconcile the staging and final tables.
+8. Pass the visible ``stream_complete`` gate and write one completion audit row.
+
+The DAG runs only when triggered. An operator can override ``input_key`` in the
+trigger form to process a corrected S3 file immediately, without changing code.
+Airflow's Grid view provides the per-task state and execution audit trail.
+"""
 
 import csv
 from datetime import timedelta
@@ -44,11 +60,6 @@ def read_s3_text(bucket: str, key: str) -> str:
             type="string",
             description="S3 key for the settlement CSV",
         ),
-        "change_reference": Param(
-            "OPS-HOTFIX-2026-09-26",
-            type="string",
-            description="Incident or change reference shown in the audit table",
-        ),
     },
     tags=["jefferies", "settlement", "demo", "hitl"],
 )
@@ -83,7 +94,6 @@ def jefferies_post_market_settlement_etl():
                     STATUS VARCHAR2(30),
                     RECORD_COUNT NUMBER,
                     TOTAL_NOTIONAL NUMBER,
-                    CHANGE_REFERENCE VARCHAR2(250),
                     COMPLETED_AT TIMESTAMP
                 )
             """,
@@ -177,8 +187,7 @@ def jefferies_post_market_settlement_etl():
         subject="Release or ice the Jefferies settlement load",
         body=(
             "The input passed validation and transformation.\n\n"
-            "- Input: `{{ params.input_key }}`\n"
-            "- Change: `{{ params.change_reference }}`\n\n"
+            "- Input: `{{ params.input_key }}`\n\n"
             "Choose **Approve** to release the load or **Reject** to ice the stream."
         ),
         defaults="Reject",
@@ -245,15 +254,13 @@ def jefferies_post_market_settlement_etl():
         cursor.execute(
             """
             INSERT INTO SETTLEMENT_AUDIT_DEMO (
-                RUN_ID, STATUS, RECORD_COUNT, TOTAL_NOTIONAL,
-                CHANGE_REFERENCE, COMPLETED_AT
-            ) VALUES (:1, 'COMPLETED', :2, :3, :4, SYSTIMESTAMP)
+                RUN_ID, STATUS, RECORD_COUNT, TOTAL_NOTIONAL, COMPLETED_AT
+            ) VALUES (:1, 'COMPLETED', :2, :3, SYSTIMESTAMP)
             """,
             [
                 context["run_id"],
                 reconciliation["record_count"],
                 Decimal(reconciliation["total_notional"]),
-                context["params"]["change_reference"],
             ],
         )
         connection.commit()
