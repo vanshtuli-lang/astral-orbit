@@ -9,7 +9,7 @@ Overall flow:
 5. Pause for an operator decision in Airflow's Required Actions UI.
 6. On Approve, load the final settlement table; on Reject, ice the stream.
 7. Reconcile the staging and final tables.
-8. Pass the visible ``stream_complete`` gate and write one completion audit row.
+8. Pass the visible ``stream_complete`` gate and publish a completion message.
 
 The DAG runs only when triggered. An operator can override ``input_key`` in the
 trigger form to process a corrected S3 file immediately, without changing code.
@@ -66,7 +66,7 @@ def read_s3_text(bucket: str, key: str) -> str:
 def jefferies_post_market_settlement_etl():
     @task
     def create_demo_tables() -> None:
-        """Create three intentionally simple tables in JEFFERIES_DEMO."""
+        """Create two intentionally simple tables in JEFFERIES_DEMO."""
         table_sql = {
             "SETTLEMENT_STAGE_DEMO": """
                 CREATE TABLE SETTLEMENT_STAGE_DEMO (
@@ -86,15 +86,6 @@ def jefferies_post_market_settlement_etl():
                     PRICE NUMBER,
                     NOTIONAL NUMBER,
                     LOADED_AT TIMESTAMP
-                )
-            """,
-            "SETTLEMENT_AUDIT_DEMO": """
-                CREATE TABLE SETTLEMENT_AUDIT_DEMO (
-                    RUN_ID VARCHAR2(250),
-                    STATUS VARCHAR2(30),
-                    RECORD_COUNT NUMBER,
-                    TOTAL_NOTIONAL NUMBER,
-                    COMPLETED_AT TIMESTAMP
                 )
             """,
         }
@@ -243,27 +234,12 @@ def jefferies_post_market_settlement_etl():
 
     @task
     def publish_completion(reconciliation: dict) -> None:
-        """Publish one small audit record after the stream-complete gate."""
-        context = get_current_context()
-        connection = get_oracle_hook().get_conn()
-        cursor = connection.cursor()
-        cursor.execute(
-            "DELETE FROM SETTLEMENT_AUDIT_DEMO WHERE RUN_ID = :1",
-            [context["run_id"]],
+        """Publish the final result in the task log for operators to see."""
+        print(
+            "Settlement load published: "
+            f"{reconciliation['record_count']} rows, "
+            f"total notional {reconciliation['total_notional']}"
         )
-        cursor.execute(
-            """
-            INSERT INTO SETTLEMENT_AUDIT_DEMO (
-                RUN_ID, STATUS, RECORD_COUNT, TOTAL_NOTIONAL, COMPLETED_AT
-            ) VALUES (:1, 'COMPLETED', :2, :3, SYSTIMESTAMP)
-            """,
-            [
-                context["run_id"],
-                reconciliation["record_count"],
-                Decimal(reconciliation["total_notional"]),
-            ],
-        )
-        connection.commit()
 
     tables_ready = create_demo_tables()
     validation = validate_file(
