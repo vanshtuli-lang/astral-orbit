@@ -2,7 +2,7 @@
 
 Overall flow:
 
-1. Wait for one settlement CSV to arrive in S3.
+1. Wait for the settlement CSV in the demo's own Azure SFTP folder.
 2. Validate that the CSV has rows and the expected columns.
 3. Copy the rows into a simple Oracle staging table.
 4. Transform each row by calculating ``notional = quantity * price``.
@@ -10,10 +10,12 @@ Overall flow:
 6. On Approve, load the final settlement table; on Reject, ice the stream.
 7. Reconcile the staging and final tables.
 8. Pass the visible ``stream_complete`` gate and publish a completion message.
+9. Rename the processed file into the demo's own SFTP archive folder.
 
-The DAG runs only when triggered. An operator can override ``input_key`` in the
-trigger form to process a corrected S3 file immediately, without changing code.
-Airflow's Grid view provides the per-task state and execution audit trail.
+The existing claims files and folders are not touched. This DAG only uses paths
+under ``jefferies_settlement/`` in the ``inbound`` container. Airflow retrieves
+the ``sftp_claims`` connection from Azure Key Vault, so no SFTP credential is
+stored in this repository. Airflow's Grid view provides the task audit trail.
 
 Prerequisite: create ``SETTLEMENT_STAGE_DEMO`` and ``SETTLEMENTS_DEMO`` once in
 the ``JEFFERIES_DEMO`` Oracle schema before running this DAG.
@@ -24,14 +26,16 @@ from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
 
-from airflow.providers.amazon.aws.hooks.s3 import S3Hook
-from airflow.providers.amazon.aws.sensors.s3 import S3KeySensor
+from airflow.providers.sftp.hooks.sftp import SFTPHook
+from airflow.providers.sftp.sensors.sftp import SFTPSensor
 from airflow.providers.standard.operators.hitl import ApprovalOperator
-from airflow.sdk import Param, dag, get_current_context, task
+from airflow.sdk import dag, get_current_context, task
 from pendulum import datetime
 
-AWS_CONN_ID = "aws_jefferies_settlement"
+SFTP_CONN_ID = "sftp_claims"
 ORACLE_CONN_ID = "oracle_jefferies_settlement"
+SETTLEMENT_FILE = "jefferies_settlement/incoming/settlement_data.csv"
+ARCHIVE_DIR = "jefferies_settlement/archive"
 
 
 def get_oracle_hook():
@@ -41,10 +45,13 @@ def get_oracle_hook():
     return OracleHook(oracle_conn_id=ORACLE_CONN_ID)
 
 
-def read_s3_text(bucket: str, key: str) -> str:
-    """Read one small demo file from S3."""
-    s3_object = S3Hook(aws_conn_id=AWS_CONN_ID).get_key(key, bucket)
-    return s3_object.get()["Body"].read().decode("utf-8")
+def read_sftp_text(remote_path: str) -> str:
+    """Read one small demo file through the Key Vault-backed SFTP connection."""
+    hook = SFTPHook(ssh_conn_id=SFTP_CONN_ID)
+    with hook.get_managed_conn() as sftp:
+        with sftp.open(remote_path, "r") as remote_file:
+            contents = remote_file.read()
+    return contents.decode("utf-8") if isinstance(contents, bytes) else contents
 
 
 @dag(
@@ -55,34 +62,24 @@ def read_s3_text(bucket: str, key: str) -> str:
     catchup=False,
     max_active_runs=1,
     default_args={"owner": "settlement-operations", "retries": 2},
-    params={
-        # Operators can change these values when triggering a run. That change
-        # takes effect immediately without editing or redeploying the DAG.
-        "input_key": Param(
-            "incoming/revised/jefferies_settlement_20260926.csv",
-            type="string",
-            description="S3 key for the settlement CSV",
-        ),
-    },
-    tags=["jefferies", "settlement", "demo", "hitl"],
+    tags=["jefferies", "settlement", "sftp", "azure", "demo", "hitl"],
 )
 def jefferies_post_market_settlement_etl():
-    # The sensor waits for the one self-contained CSV file. Deferrable mode
-    # means it does not hold a worker while it waits.
-    wait_for_files = S3KeySensor(
-        task_id="wait_for_settlement_files",
-        aws_conn_id=AWS_CONN_ID,
-        bucket_name="{{ var.value.jefferies_settlement_bucket }}",
-        bucket_key="{{ params.input_key }}",
-        deferrable=True,
+    # The sensor checks only our dedicated folder. Deferrable mode means it
+    # does not occupy a worker while waiting for the file.
+    wait_for_file = SFTPSensor(
+        task_id="wait_for_file",
+        sftp_conn_id=SFTP_CONN_ID,
+        path=SETTLEMENT_FILE,
         poke_interval=30,
-        timeout=6 * 60 * 60,
+        timeout=1800,
+        deferrable=True,
     )
 
     @task
-    def validate_file(bucket: str, input_key: str) -> dict:
+    def validate_file(remote_path: str) -> dict:
         """Confirm that the CSV is non-empty and has the expected columns."""
-        rows = list(csv.DictReader(StringIO(read_s3_text(bucket, input_key))))
+        rows = list(csv.DictReader(StringIO(read_sftp_text(remote_path))))
         expected_columns = {"trade_id", "account_id", "quantity", "price"}
 
         if not rows:
@@ -91,15 +88,13 @@ def jefferies_post_market_settlement_etl():
             raise ValueError(f"Settlement CSV must contain {sorted(expected_columns)}")
 
         print(f"Validated {len(rows)} settlement rows")
-        return {"record_count": len(rows), "bucket": bucket, "input_key": input_key}
+        return {"record_count": len(rows), "remote_path": remote_path}
 
     @task
     def stage_file(validation: dict) -> int:
         """Copy the small CSV into the Oracle staging table."""
         rows = list(
-            csv.DictReader(
-                StringIO(read_s3_text(validation["bucket"], validation["input_key"]))
-            )
+            csv.DictReader(StringIO(read_sftp_text(validation["remote_path"])))
         )
         run_id = get_current_context()["run_id"]
 
@@ -145,7 +140,7 @@ def jefferies_post_market_settlement_etl():
         subject="Release or ice the Jefferies settlement load",
         body=(
             "The input passed validation and transformation.\n\n"
-            "- Input: `{{ params.input_key }}`\n\n"
+            f"- Input: `{SETTLEMENT_FILE}`\n\n"
             "Choose **Approve** to release the load or **Reject** to ice the stream."
         ),
         defaults="Reject",
@@ -208,10 +203,7 @@ def jefferies_post_market_settlement_etl():
             f"total notional {reconciliation['total_notional']}"
         )
 
-    validation = validate_file(
-        "{{ var.value.jefferies_settlement_bucket }}",
-        "{{ params.input_key }}",
-    )
+    validation = validate_file(SETTLEMENT_FILE)
     staged = stage_file(validation)
     transformed = transform_rows(staged)
     loaded = load_settlements()
@@ -219,10 +211,25 @@ def jefferies_post_market_settlement_etl():
     complete = stream_complete(reconciled)
     published = publish_completion(complete)
 
+    @task
+    def archive_file() -> None:
+        """Rename the processed file inside the demo's own SFTP folders."""
+        logical_date = get_current_context()["logical_date"]
+        timestamp = logical_date.strftime("%Y%m%dT%H%M%S")
+        archive_path = f"{ARCHIVE_DIR}/settlement_data_{timestamp}.csv"
+
+        hook = SFTPHook(ssh_conn_id=SFTP_CONN_ID)
+        hook.create_directory(ARCHIVE_DIR)
+        with hook.get_managed_conn() as sftp:
+            sftp.rename(SETTLEMENT_FILE, archive_path)
+        print(f"Archived {SETTLEMENT_FILE} to {archive_path}")
+
+    archived = archive_file()
+
     # These explicit dependencies make the demo read like the batch plan.
-    wait_for_files >> validation
+    wait_for_file >> validation
     transformed >> release_or_ice >> loaded
-    reconciled >> complete >> published
+    reconciled >> complete >> published >> archived
 
 
 jefferies_post_market_settlement_etl()
