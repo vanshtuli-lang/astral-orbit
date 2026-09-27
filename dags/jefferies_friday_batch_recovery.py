@@ -6,29 +6,26 @@ Main flow:
 2. Run three ingestion branches in parallel.
 3. Transform each branch independently.
 4. Join the branches at ``load_database``.
-5. Intentionally fail the first run when ``friday_batch_force_failure`` is true.
+5. Intentionally fail the first attempt of ``load_database``.
 6. Inspect the real task state and failure logs with Otto for RCA.
-7. Recover by setting the Variable to false and clearing only the failed load
-   task with its downstream tasks.
-8. Reconcile the recovered load and emit an Asset event that triggers the
-   downstream confirmation DAG.
+7. Recover by clearing only the failed load task with its downstream tasks.
+8. Reconcile the recovered load and run the final downstream handoff task.
 
 The controlled failure happens before Oracle is modified. The failed task logs
-its run ID, task ID, try number, prepared record count, and failure setting so
-Otto can produce RCA from actual run evidence. The load deletes rows for the
-current run before inserting, so rerunning it is safe and needs no manual cleanup.
+its run ID, task ID, try number, and prepared record count so Otto can produce
+RCA from actual evidence. When manually cleared, the second attempt succeeds.
+The load deletes rows for the current run before inserting, so rerunning it is
+safe and needs no manual cleanup.
 """
 
 import json
 import logging
 from decimal import Decimal
 
-from airflow.sdk import Asset, Variable, dag, get_current_context, task
+from airflow.sdk import dag, get_current_context, task
 from pendulum import datetime
 
 ORACLE_CONN_ID = "oracle_jefferies_settlement"
-FAILURE_VARIABLE = "friday_batch_force_failure"
-FRIDAY_BATCH_COMPLETE = Asset("jefferies://friday-batch/complete")
 logger = logging.getLogger(__name__)
 
 
@@ -37,11 +34,6 @@ def get_oracle_hook():
     from airflow.providers.oracle.hooks.oracle import OracleHook
 
     return OracleHook(oracle_conn_id=ORACLE_CONN_ID)
-
-
-def failure_enabled() -> bool:
-    """Default to failure so the first demonstration is deterministic."""
-    return str(Variable.get(FAILURE_VARIABLE, default="true")).lower() == "true"
 
 
 @dag(
@@ -71,11 +63,7 @@ def friday_batch_failure_recovery():
         if cursor.fetchone()[0] != 1:
             raise ValueError("JEFFERIES_FRIDAY_BATCH_RESULTS does not exist")
 
-        logger.info(
-            "Pre-flight complete. %s=%s",
-            FAILURE_VARIABLE,
-            failure_enabled(),
-        )
+        logger.info("Pre-flight checks passed")
 
     # These three tasks represent independent Friday source streams.
     @task
@@ -132,21 +120,18 @@ def friday_batch_failure_recovery():
             "task_id": context["task"].task_id,
             "try_number": context["ti"].try_number,
             "records_ready": len(records),
-            "failure_variable": FAILURE_VARIABLE,
-            "failure_enabled": failure_enabled(),
             "database_modified": False,
         }
         logger.info("Load task context: %s", json.dumps(failure_context, sort_keys=True))
 
-        if failure_context["failure_enabled"]:
+        if context["ti"].try_number == 1:
             logger.error(
-                "CONTROLLED_FRIDAY_FAILURE: load blocked by %s. Context=%s",
-                FAILURE_VARIABLE,
+                "CONTROLLED_FRIDAY_FAILURE: first load attempt failed. Context=%s",
                 json.dumps(failure_context, sort_keys=True),
             )
             raise RuntimeError(
-                f"Controlled demo failure: set {FAILURE_VARIABLE}=false, then clear "
-                "load_database with its downstream tasks"
+                "Controlled demo failure: clear load_database with its downstream "
+                "tasks to continue from this point"
             )
 
         connection = get_oracle_hook().get_conn()
@@ -199,10 +184,10 @@ def friday_batch_failure_recovery():
         logger.info("Reconciliation passed: %s", result)
         return result
 
-    @task(outlets=[FRIDAY_BATCH_COMPLETE])
+    @task
     def trigger_downstream(reconciliation: dict) -> None:
-        """Emit a real Asset event for the downstream confirmation DAG."""
-        logger.info("Friday batch complete; publishing downstream event: %s", reconciliation)
+        """Represent the final handoff to downstream processing."""
+        logger.info("Friday batch complete; downstream handoff: %s", reconciliation)
 
     preflight = preflight_checks()
 
@@ -224,22 +209,4 @@ def friday_batch_failure_recovery():
     trigger_downstream(reconciled)
 
 
-@dag(
-    dag_id="Jefferies_friday_batch_downstream",
-    description="Downstream confirmation triggered by the recovered Friday batch",
-    start_date=datetime(2026, 9, 26, tz="America/New_York"),
-    schedule=[FRIDAY_BATCH_COMPLETE],
-    catchup=False,
-    default_args={"owner": "batch-operations", "retries": 2},
-    tags=["jefferies", "friday-batch", "downstream", "demo"],
-)
-def friday_batch_downstream():
-    @task
-    def confirm_downstream_start() -> None:
-        logger.info("Downstream Friday processing started from the completion Asset event")
-
-    confirm_downstream_start()
-
-
 friday_batch_failure_recovery()
-friday_batch_downstream()
