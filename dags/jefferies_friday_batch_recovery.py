@@ -7,15 +7,16 @@ Main flow:
 3. Transform each branch independently.
 4. Join the branches at ``load_database``.
 5. Intentionally fail the first run when ``friday_batch_force_failure`` is true.
-6. Run an RCA task even though the load failed.
+6. Inspect the real task state and failure logs with Otto for RCA.
 7. Recover by setting the Variable to false and clearing only the failed load
    task with its downstream tasks.
 8. Reconcile the recovered load and emit an Asset event that triggers the
    downstream confirmation DAG.
 
-The controlled failure happens before Oracle is modified. The load also deletes
-rows for the current run before inserting, so rerunning it is safe and requires
-no manual database cleanup.
+The controlled failure happens before Oracle is modified. The failed task logs
+its run ID, task ID, try number, prepared record count, and failure setting so
+Otto can produce RCA from actual run evidence. The load deletes rows for the
+current run before inserting, so rerunning it is safe and needs no manual cleanup.
 """
 
 import json
@@ -45,13 +46,13 @@ def failure_enabled() -> bool:
 
 @dag(
     dag_id="Jefferies_friday_batch_failure_recovery",
-    description="Friday batch failure, RCA, and selective recovery demo",
+    description="Friday batch failure and selective recovery demo",
     start_date=datetime(2026, 9, 26, tz="America/New_York"),
     schedule=None,
     catchup=False,
     max_active_runs=1,
     default_args={"owner": "batch-operations", "retries": 2},
-    tags=["jefferies", "friday-batch", "recovery", "rca", "demo"],
+    tags=["jefferies", "friday-batch", "recovery", "demo"],
 )
 def friday_batch_failure_recovery():
     @task
@@ -203,36 +204,6 @@ def friday_batch_failure_recovery():
         """Emit a real Asset event for the downstream confirmation DAG."""
         logger.info("Friday batch complete; publishing downstream event: %s", reconciliation)
 
-    @task(trigger_rule="all_done")
-    def rca_summary() -> dict:
-        """Provide a concise operator handoff after failure or recovery."""
-        if failure_enabled():
-            summary = {
-                "failed_task": "load_database",
-                "error_source": f"Controlled setting {FAILURE_VARIABLE}=true",
-                "completed_work": [
-                    "preflight_checks",
-                    "all three ingestion tasks",
-                    "all three transformation tasks",
-                ],
-                "affected_downstream": ["reconcile", "trigger_downstream"],
-                "database_cleanup_required": False,
-                "recommended_next_action": (
-                    f"Set {FAILURE_VARIABLE}=false, then clear load_database "
-                    "with Downstream selected"
-                ),
-            }
-            logger.error("RCA SUMMARY\n%s", json.dumps(summary, indent=2))
-        else:
-            summary = {
-                "recovery_status": "Controlled issue corrected",
-                "rerun_scope": ["load_database", "reconcile", "trigger_downstream"],
-                "database_cleanup_required": False,
-                "recommended_next_action": "Verify reconciliation and downstream run",
-            }
-            logger.info("RECOVERY SUMMARY\n%s", json.dumps(summary, indent=2))
-        return summary
-
     preflight = preflight_checks()
 
     trades = ingest_trades()
@@ -251,9 +222,6 @@ def friday_batch_failure_recovery():
     )
     reconciled = reconcile(loaded)
     trigger_downstream(reconciled)
-
-    rca = rca_summary()
-    loaded >> rca
 
 
 @dag(
