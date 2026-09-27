@@ -23,4 +23,5 @@ jobs:
           deployment-id: cmuiehb7y3rk701jr0k2e5t7a
           deploy-type: infer
           parse: true
+          wake-on-deploy: true
           description: Deployed from GitHub commit ${{ github.sha }}
