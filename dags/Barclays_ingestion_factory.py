@@ -9,7 +9,7 @@ The factory is intentionally small:
 3. ``publish_to_landing`` moves that CSV into the final landing folder.
 
 A new tenant is onboarded by adding one entry to
-``include/Barclays_ingestion_tenants.json``. No DAG code needs to be copied.
+``dags/Barclays_ingestion_tenants.json``. No DAG code needs to be copied.
 
 Production extensions such as detailed data-quality rules, ServiceNow alerts,
 schema evolution, and persistent checkpoints can be inserted between extract
@@ -33,12 +33,8 @@ from airflow.providers.sftp.hooks.sftp import SFTPHook
 from airflow.sdk import dag, get_current_context, task
 from pendulum import datetime
 
-# The factory reads this file once when Airflow parses the DAG file.
-CONFIG_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "include"
-    / "Barclays_ingestion_tenants.json"
-)
+# Keep the config beside the DAG so Astro DAG-only bundles deploy both files.
+CONFIG_PATH = Path(__file__).with_name("Barclays_ingestion_tenants.json")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_$#]*$")
 LOGGER = logging.getLogger(__name__)
 
