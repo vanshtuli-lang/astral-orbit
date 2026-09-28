@@ -13,7 +13,6 @@
         "AMOUNT",
         "LAST_UPDATED_TS"
       ],
-      "watermark_column": "LAST_UPDATED_TS",
       "sftp_conn_id": "sftp_claims",
       "landing_path": "Barclays_ingestion/customer_transactions"
     },
@@ -30,7 +29,6 @@
         "ACCOUNT_STATUS",
         "LAST_UPDATED_TS"
       ],
-      "watermark_column": "LAST_UPDATED_TS",
       "sftp_conn_id": "sftp_claims",
       "landing_path": "Barclays_ingestion/customer_accounts"
     }
