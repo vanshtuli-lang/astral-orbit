@@ -10,12 +10,13 @@ Overall flow:
 6. On Approve, load the final settlement table; on Reject, ice the stream.
 7. Reconcile the staging and final tables.
 8. Pass the visible ``stream_complete`` gate and publish a completion message.
-9. Rename the processed file into the demo's own SFTP archive folder.
+9. Copy the processed file into the demo's own SFTP archive folder while
+   leaving the incoming file available for the next demo run.
 
 The existing claims files and folders are not touched. This DAG only uses paths
-under ``jefferies_settlement/`` in the ``inbound`` container. Airflow retrieves
-the ``sftp_claims`` connection from Azure Key Vault, so no SFTP credential is
-stored in this repository. Airflow's Grid view provides the task audit trail.
+under ``jefferies_settlement/`` in the ``inbound`` container. Airflow uses the
+secret ``sftp_claims`` connection, so no SFTP credential is stored in this
+repository. Airflow's Grid view provides the task audit trail.
 
 Prerequisite: create ``JEFFERIES_SETTLEMENT_STAGE`` and
 ``JEFFERIES_SETTLEMENTS`` once in the existing staging schema used by the
@@ -214,7 +215,7 @@ def jefferies_post_market_settlement_etl():
 
     @task
     def archive_file() -> None:
-        """Rename the processed file inside the demo's own SFTP folders."""
+        """Copy the processed file to the archive and retain the incoming copy."""
         logical_date = get_current_context()["logical_date"]
         timestamp = logical_date.strftime("%Y%m%dT%H%M%S")
         archive_path = f"{ARCHIVE_DIR}/settlement_data_{timestamp}.csv"
@@ -222,8 +223,11 @@ def jefferies_post_market_settlement_etl():
         hook = SFTPHook(ssh_conn_id=SFTP_CONN_ID)
         hook.create_directory(ARCHIVE_DIR)
         with hook.get_managed_conn() as sftp:
-            sftp.rename(SETTLEMENT_FILE, archive_path)
-        print(f"Archived {SETTLEMENT_FILE} to {archive_path}")
+            with sftp.open(SETTLEMENT_FILE, "rb") as source:
+                with sftp.open(archive_path, "wb") as destination:
+                    while chunk := source.read(1024 * 1024):
+                        destination.write(chunk)
+        print(f"Copied {SETTLEMENT_FILE} to {archive_path}")
 
     archived = archive_file()
 
