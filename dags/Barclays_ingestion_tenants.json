@@ -1,0 +1,36 @@
+{
+  "tenants": [
+    {
+      "dag_id": "Barclays_customer_transactions_ingestion",
+      "tenant": "retail_banking",
+      "owner": "edp-ingestion",
+      "schedule": "0 */4 * * *",
+      "oracle_conn_id": "oracle_jefferies_settlement",
+      "source_table": "BARCLAYS_CUSTOMER_TRANSACTIONS",
+      "columns": [
+        "TRANSACTION_ID",
+        "ACCOUNT_ID",
+        "AMOUNT",
+        "LAST_UPDATED_TS"
+      ],
+      "sftp_conn_id": "sftp_claims",
+      "landing_path": "Barclays_ingestion/customer_transactions"
+    },
+    {
+      "dag_id": "Barclays_customer_accounts_ingestion",
+      "tenant": "corporate_banking",
+      "owner": "edp-ingestion",
+      "schedule": "0 */6 * * *",
+      "oracle_conn_id": "oracle_jefferies_settlement",
+      "source_table": "BARCLAYS_CUSTOMER_ACCOUNTS",
+      "columns": [
+        "ACCOUNT_ID",
+        "CUSTOMER_ID",
+        "ACCOUNT_STATUS",
+        "LAST_UPDATED_TS"
+      ],
+      "sftp_conn_id": "sftp_claims",
+      "landing_path": "Barclays_ingestion/customer_accounts"
+    }
+  ]
+}
