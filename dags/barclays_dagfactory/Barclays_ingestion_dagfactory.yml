@@ -21,7 +21,8 @@ Barclays_dagfactory_customer_transactions_ingestion:
   tasks:
     - task_id: extract_table_to_csv
       decorator: airflow.sdk.task
-      python_callable: barclays_dagfactory.ingestion_tasks.extract_table_to_csv
+      python_callable_file: $BARCLAYS_DAGFACTORY_DIR/ingestion_tasks.py
+      python_callable_name: extract_table_to_csv
       oracle_conn_id: oracle_jefferies_settlement
       source_table: BARCLAYS_CUSTOMER_TRANSACTIONS
       columns: [TRANSACTION_ID, ACCOUNT_ID, AMOUNT, LAST_UPDATED_TS]
@@ -29,7 +30,8 @@ Barclays_dagfactory_customer_transactions_ingestion:
       landing_path: Barclays_ingestion/customer_transactions
     - task_id: publish_csv
       decorator: airflow.sdk.task
-      python_callable: barclays_dagfactory.ingestion_tasks.publish_csv
+      python_callable_file: $BARCLAYS_DAGFACTORY_DIR/ingestion_tasks.py
+      python_callable_name: publish_csv
       extraction: +extract_table_to_csv
       tenant: retail_banking
       source_table: BARCLAYS_CUSTOMER_TRANSACTIONS
@@ -41,7 +43,8 @@ Barclays_dagfactory_customer_accounts_ingestion:
   tasks:
     - task_id: extract_table_to_csv
       decorator: airflow.sdk.task
-      python_callable: barclays_dagfactory.ingestion_tasks.extract_table_to_csv
+      python_callable_file: $BARCLAYS_DAGFACTORY_DIR/ingestion_tasks.py
+      python_callable_name: extract_table_to_csv
       oracle_conn_id: oracle_jefferies_settlement
       source_table: BARCLAYS_CUSTOMER_ACCOUNTS
       columns: [ACCOUNT_ID, CUSTOMER_ID, ACCOUNT_STATUS, LAST_UPDATED_TS]
@@ -49,7 +52,8 @@ Barclays_dagfactory_customer_accounts_ingestion:
       landing_path: Barclays_ingestion/customer_accounts
     - task_id: publish_csv
       decorator: airflow.sdk.task
-      python_callable: barclays_dagfactory.ingestion_tasks.publish_csv
+      python_callable_file: $BARCLAYS_DAGFACTORY_DIR/ingestion_tasks.py
+      python_callable_name: publish_csv
       extraction: +extract_table_to_csv
       tenant: corporate_banking
       source_table: BARCLAYS_CUSTOMER_ACCOUNTS
