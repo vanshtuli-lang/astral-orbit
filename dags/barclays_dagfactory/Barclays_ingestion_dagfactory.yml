@@ -1,0 +1,57 @@
+# dag-factory flavor of the Barclays Oracle-to-SFTP ingestion factory.
+# Each top-level key (other than `default`) becomes one two-task DAG:
+#   1. extract_table_to_csv - read the full Oracle table, stage a CSV on SFTP
+#   2. publish_csv          - move the staged CSV into the tenant's landing folder
+# To onboard a tenant, copy a DAG block and change its values.
+
+default:
+  description: "dag-factory generated full-table Oracle export into SFTP"
+  start_date: 2026-09-28
+  timezone: America/New_York
+  catchup: false
+  is_paused_upon_creation: true
+  max_active_runs: 1
+  default_args:
+    owner: edp-ingestion
+    retries: 2
+  tags: [barclays, oracle, sftp, demo]
+
+Barclays_dagfactory_customer_transactions_ingestion:
+  schedule: "0 */4 * * *"
+  tasks:
+    - task_id: extract_table_to_csv
+      decorator: airflow.sdk.task
+      python_callable: barclays_dagfactory.ingestion_tasks.extract_table_to_csv
+      oracle_conn_id: oracle_jefferies_settlement
+      source_table: BARCLAYS_CUSTOMER_TRANSACTIONS
+      columns: [TRANSACTION_ID, ACCOUNT_ID, AMOUNT, LAST_UPDATED_TS]
+      sftp_conn_id: sftp_claims
+      landing_path: Barclays_ingestion/customer_transactions
+    - task_id: publish_csv
+      decorator: airflow.sdk.task
+      python_callable: barclays_dagfactory.ingestion_tasks.publish_csv
+      extraction: +extract_table_to_csv
+      tenant: retail_banking
+      source_table: BARCLAYS_CUSTOMER_TRANSACTIONS
+      sftp_conn_id: sftp_claims
+      landing_path: Barclays_ingestion/customer_transactions
+
+Barclays_dagfactory_customer_accounts_ingestion:
+  schedule: "0 */6 * * *"
+  tasks:
+    - task_id: extract_table_to_csv
+      decorator: airflow.sdk.task
+      python_callable: barclays_dagfactory.ingestion_tasks.extract_table_to_csv
+      oracle_conn_id: oracle_jefferies_settlement
+      source_table: BARCLAYS_CUSTOMER_ACCOUNTS
+      columns: [ACCOUNT_ID, CUSTOMER_ID, ACCOUNT_STATUS, LAST_UPDATED_TS]
+      sftp_conn_id: sftp_claims
+      landing_path: Barclays_ingestion/customer_accounts
+    - task_id: publish_csv
+      decorator: airflow.sdk.task
+      python_callable: barclays_dagfactory.ingestion_tasks.publish_csv
+      extraction: +extract_table_to_csv
+      tenant: corporate_banking
+      source_table: BARCLAYS_CUSTOMER_ACCOUNTS
+      sftp_conn_id: sftp_claims
+      landing_path: Barclays_ingestion/customer_accounts
