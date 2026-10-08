@@ -15,7 +15,7 @@ Tables (STAGING schema, unchanged):
     TRADE_SETTLEMENTS  - completed settlements (Sept 2026), status SETTLED/FAILED/CANCELLED
     SETTLEMENT_STAGE   - trades awaiting settlement (Oct 2026), MATCHED/UNMATCHED/EXCEPTION
 
-Connections: ``pydanticai_default`` (LLM) and ``oracle_settlement`` (schema lookup only).
+Connections: ``pydanticai_default`` (LLM) and ``oracle_jefferies_settlement`` (schema lookup only).
 """
 
 from datetime import datetime as dt
@@ -26,7 +26,7 @@ from airflow.providers.standard.operators.hitl import HITLEntryOperator
 from airflow.sdk import Asset, Param, dag, task
 from pendulum import datetime
 
-ORACLE_CONN_ID = "oracle_settlement"
+ORACLE_CONN_ID = "oracle_jefferies_settlement"
 SCHEMA = "STAGING"
 TABLES = ["TRADE_SETTLEMENTS", "SETTLEMENT_STAGE"]
 SCHEMA_ASSET = Asset(name="rbc_settlement_schema")  # holds the cached schema in its state store
