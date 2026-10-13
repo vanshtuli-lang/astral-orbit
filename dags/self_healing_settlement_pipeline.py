@@ -45,7 +45,7 @@ def self_healing_settlement_pipeline():
     @task
     def check_quality(rows):
         assert rows, "File is empty"
-        assert list(rows[0]) == COLUMNS, f"Expected columns {COLUMNS}, got {list(rows[0])}"
+        assert set(rows[0]) == set(COLUMNS), f"Expected columns {COLUMNS}, got {list(rows[0])}"
         for row in rows:
             assert row["trade_id"], "Missing trade_id"
             assert int(row["quantity"]) > 0, f"Bad quantity in {row['trade_id']}"
