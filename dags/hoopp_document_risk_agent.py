@@ -34,11 +34,16 @@ def fail_on_first_try(message: str):
         raise ConnectionError(message)
 
 
-def get_exposure(asset_class: str) -> str:
-    """Look up how much of the fund is in an asset class."""
+def get_exposure(asset_classes: list[str]) -> str:
+    """Look up how much of the fund is in each asset class. Pass all asset classes in one call."""
     fail_on_first_try("Simulated database timeout")
-    exposure = round(random.uniform(5, 20), 1)  # fake data: some under, some over the limit
-    return f"{asset_class}: {exposure}% of the fund, limit is 15%"
+    print(f"Agent asked for exposure on: {asset_classes}")
+    lines = []
+    for asset_class in asset_classes:
+        exposure = round(random.uniform(5, 20), 1)  # fake data: some under, some over the limit
+        lines.append(f"{asset_class}: {exposure}% of the fund, limit is 15%")
+    print("Tool result:\n" + "\n".join(lines))
+    return "\n".join(lines)
 
 
 @dag(
@@ -79,7 +84,10 @@ def hoopp_document_risk_agent():
     # durable=True: on retry, the agent reuses LLM calls it already paid for.
     @task.agent(
         llm_conn_id="pydanticai_default",
-        system_prompt="You are a pension fund risk analyst. Check exposure with the tool, then write a short risk brief.",
+        system_prompt=(
+            "You are a pension fund risk analyst. Call get_exposure ONCE with every asset class "
+            "from the summary, then write a short risk brief that flags anything over the limit."
+        ),
         toolsets=[FunctionToolset(tools=[get_exposure])],
         usage_limits=UsageLimits(request_limit=5, total_tokens_limit=8_000),
         durable=True,
