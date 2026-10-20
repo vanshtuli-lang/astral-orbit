@@ -33,6 +33,7 @@ def get_exposure(asset_class: str) -> str:
     return f"{asset_class}: 14% of the fund, limit is 15%"
 
 
+
 @dag(
     start_date=datetime(2026, 10, 1),
     schedule=None,
