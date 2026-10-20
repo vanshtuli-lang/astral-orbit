@@ -31,7 +31,7 @@ import pendulum
 from airflow.sdk import PokeReturnValue, dag, task
 from airflow.providers.common.sql.sensors.sql import SqlSensor
 from airflow.providers.http.sensors.http import HttpSensor
-from airflow.providers.standard.sensors.date_time import DateTimeSensor
+from airflow.providers.standard.sensors.date_time import DateTimeSensorAsync
 from airflow.providers.standard.sensors.external_task import ExternalTaskSensor
 from airflow.providers.standard.sensors.filesystem import FileSensor
 
@@ -46,10 +46,9 @@ def sensors_showcase():
 
     # 1. Wait for a time
     # Use case: don't start loading until the business window opens.
-    wait_for_time = DateTimeSensor(
+    wait_for_time = DateTimeSensorAsync(
         task_id="wait_for_time",
         target_time="{{ (dag_run.start_date + macros.timedelta(seconds=30)).isoformat() }}",
-        deferrable=True,
     )
 
     # 2. Wait for a file
@@ -104,8 +103,6 @@ def sensors_showcase():
         poke_interval=60,
         timeout=60 * 60,
     )
-
-    wait_for_rows -> 
 
     # 5. Write your own sensor with plain Python
     # Use case: anything without a built-in sensor (a job status, a flag in a table...).
