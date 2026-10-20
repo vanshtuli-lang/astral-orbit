@@ -1,13 +1,16 @@
 """
-### HOOPP demo: AI document summary + risk agent
+### HOOPP demo: turn investment documents into a risk brief
 
-    read_documents  ->  summarize_documents  ->  risk_agent  ->  save_brief
-    (task state:        (LLM + human             (AI agent,      (asset state:
-     resumes on retry)   approval)                retries)        remembered across runs)
+1. **read_documents**       - read the documents. Crashes halfway, the retry picks up where it left off.
+2. **summarize_documents**  - an LLM summarizes them. An analyst approves (or edits) it in the UI.
+3. **risk_agent**           - an AI agent checks exposure with a tool and writes a risk brief.
+4. **save_brief**           - saves the brief and compares it with the previous run.
 
-LLM calls use the `pydanticai_default` connection. All documents are fake.
+The first try of steps 1 and 3 fails on purpose to show retries.
+LLM calls use the `pydanticai_default` connection. All data is fake.
 """
 
+import random
 from datetime import timedelta
 
 from airflow.sdk import Asset, dag, get_current_context, task
@@ -25,47 +28,43 @@ DOCUMENTS = [
 ]
 
 
+def fail_on_first_try(message: str):
+    """Demo only: raise an error on the first try so Airflow retries the task."""
+    if get_current_context()["ti"].try_number == 1:
+        raise ConnectionError(message)
+
+
 def get_exposure(asset_class: str) -> str:
     """Look up how much of the fund is in an asset class."""
-    # Fails on the first try on purpose, so you can watch Airflow retry it
-    if get_current_context()["ti"].try_number == 1:
-        raise ConnectionError("Simulated database timeout")
-    return f"{asset_class}: 14% of the fund, limit is 15%"
-
+    fail_on_first_try("Simulated database timeout")
+    exposure = round(random.uniform(5, 20), 1)  # fake data: some under, some over the limit
+    return f"{asset_class}: {exposure}% of the fund, limit is 15%"
 
 
 @dag(
     start_date=datetime(2026, 10, 1),
     schedule=None,
     tags=["hoopp", "ai", "demo"],
-    default_args={
-        "retries": 2,  # try again before giving up
-        "retry_delay": timedelta(seconds=5),
-    },
+    default_args={"retries": 2, "retry_delay": timedelta(seconds=5)},
 )
 def hoopp_document_risk_agent():
 
-    # 1. TASK STATE STORE: save progress after each document. The first try
-    # crashes halfway; the retry picks up at document 3 instead of starting over.
+    # Step 1 - shows: TASK STATE STORE (progress survives a crash)
     @task
-    def read_documents(ti=None, task_state_store=None) -> str:
+    def read_documents(task_state_store=None) -> str:
         done = task_state_store.get("docs_read", default=[])
         print(f"Already read before this try: {len(done)} documents")
 
-        for i, doc in enumerate(DOCUMENTS):
-            if i < len(done):
-                continue  # read on an earlier try, skip it
-            if i == 2 and ti.try_number == 1:
-                raise ConnectionError("Simulated crash halfway through")
-            print(f"Reading document {i + 1}")
+        for doc in DOCUMENTS[len(done):]:  # skip what an earlier try already read
+            if len(done) == 2:
+                fail_on_first_try("Simulated crash halfway through")
+            print(f"Reading document {len(done) + 1}")
             done.append(doc)
-            task_state_store.set("docs_read", done)
+            task_state_store.set("docs_read", done)  # save progress
 
         return "\n".join(done)
 
-    # 2. LLM OPERATOR + HUMAN IN THE LOOP + COST GUARDRAIL
-    # The task pauses until an analyst approves (and can edit) the summary in
-    # the Airflow UI. usage_limits caps how much this one task can spend.
+    # Step 2 - shows: LLM TASK + HUMAN APPROVAL + COST LIMIT
     @task.llm(
         llm_conn_id="pydanticai_default",
         system_prompt="Summarize in 3 bullet points.",
@@ -76,10 +75,8 @@ def hoopp_document_risk_agent():
     def summarize_documents(documents: str) -> str:
         return documents
 
-    # 3. AI AGENT + COST GUARDRAIL: the agent decides which tools to call, but
-    # it can't go past 5 LLM calls or 8,000 tokens.
-    # durable=True saves each LLM call in the task state store, so when the tool
-    # fails and Airflow retries, the agent doesn't pay for those calls again.
+    # Step 3 - shows: AI AGENT + TOOLS + COST LIMIT
+    # durable=True: on retry, the agent reuses LLM calls it already paid for.
     @task.agent(
         llm_conn_id="pydanticai_default",
         system_prompt="You are a pension fund risk analyst. Check exposure with the tool, then write a short risk brief.",
@@ -90,8 +87,7 @@ def hoopp_document_risk_agent():
     def risk_agent(summary: str) -> str:
         return summary
 
-    # 4. ASSET STATE STORE: remembers the last brief and a run count across
-    # runs, so each run can be compared with the one before it.
+    # Step 4 - shows: ASSET STATE STORE (remembered across runs)
     @task(outlets=[RISK_BRIEF])
     def save_brief(brief: str, asset_state_store=None):
         store = asset_state_store[RISK_BRIEF]
@@ -102,7 +98,11 @@ def hoopp_document_risk_agent():
         store.set("last_brief", brief)
         store.set("run_count", run_count)
 
-    save_brief(risk_agent(summarize_documents(read_documents())))
+    # The flow
+    documents = read_documents()
+    summary = summarize_documents(documents)
+    brief = risk_agent(summary)
+    save_brief(brief)
 
 
 hoopp_document_risk_agent()
