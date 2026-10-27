@@ -27,6 +27,7 @@ def try_number() -> int:
     return get_current_context()["ti"].try_number
 
 
+
 def roll_dice() -> int:
     """Roll a 1,000,000-sided die."""
     value = random.randint(1, 1_000_000)
