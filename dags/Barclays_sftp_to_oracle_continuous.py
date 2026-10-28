@@ -18,10 +18,9 @@ from __future__ import annotations
 import logging
 
 import pendulum
-from airflow.decorators import dag, task
-from airflow.models import Variable
-from airflow.operators.empty import EmptyOperator
 from airflow.providers.sftp.hooks.sftp import SFTPHook
+from airflow.providers.standard.operators.empty import EmptyOperator
+from airflow.sdk import Variable, dag, task
 
 SFTP_CONN_ID = "sftp_claims"
 ORACLE_CONN_ID = "oracle_jefferies_settlement"  # not used, the load is a stub
@@ -47,7 +46,7 @@ def barclays_sftp_to_oracle_continuous():
 
     @task.short_circuit
     def list_new_files() -> list[str]:
-        watermark = Variable.get(WATERMARK_VAR, default_var="")
+        watermark = Variable.get(WATERMARK_VAR, default="")
         hook = SFTPHook(ssh_conn_id=SFTP_CONN_ID)
 
         # Filenames sort by arrival time, so "after the watermark" == "new".
