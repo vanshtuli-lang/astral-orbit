@@ -1,16 +1,13 @@
-"""Demo: start a DAG from outside Airflow (Airflow 2.10).
+"""Demo: start a DAG from outside Airflow (Airflow 3).
 
-No DAG produces this dataset and nothing in Airflow polls for it. It only
-gets updated from outside, in one of two ways:
+No DAG produces this asset and nothing in Airflow polls for it. It only gets
+updated from outside, in one of two ways:
 
 1. A POST to the REST API - mainframe, Informatica, a Kafka consumer,
-   anything that can make an HTTP call:
+   anything that can make an HTTP call. See include/trigger_eod_batch.sh.
 
-   curl -X POST 'http://localhost:8080/api/v1/datasets/events' \
-     -H 'Content-Type: application/json' --user 'admin:admin' \
-     -d '{"dataset_uri": "mainframe://barclays/eod_batch"}'
-
-2. A human opens the Datasets tab and hits manual update.
+2. A human opens the Assets tab, picks the asset, and hits the play button
+   (choose "Manual", not "Materialize" - nothing produces this one).
 
 Either way, this DAG starts within seconds.
 """
@@ -20,11 +17,10 @@ from __future__ import annotations
 import logging
 
 import pendulum
-from airflow.datasets import Dataset
-from airflow.decorators import dag, task
+from airflow.sdk import Asset, dag, task
 
 # Nothing in Airflow writes to this. The upstream system owns it.
-EOD_BATCH = Dataset("mainframe://barclays/eod_batch")
+EOD_BATCH = Asset("mainframe://barclays/eod_batch")
 
 
 @dag(
@@ -32,7 +28,7 @@ EOD_BATCH = Dataset("mainframe://barclays/eod_batch")
     schedule=[EOD_BATCH],
     start_date=pendulum.datetime(2026, 10, 1, tz="America/New_York"),
     catchup=False,
-    tags=["barclays", "datasets", "demo"],
+    tags=["barclays", "assets", "demo"],
     doc_md=__doc__,
 )
 def external_trigger():
