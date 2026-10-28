@@ -49,9 +49,18 @@ def barclays_sftp_to_oracle_continuous():
         watermark = Variable.get(WATERMARK_VAR, default="")
         hook = SFTPHook(ssh_conn_id=SFTP_CONN_ID)
 
+        # The landing folder may not exist yet on a fresh SFTP server. That is
+        # a "nothing has arrived" situation, not a failure - don't let a
+        # @continuous DAG go red on an empty environment.
+        try:
+            listing = hook.list_directory(INCOMING_DIR)
+        except FileNotFoundError:
+            log.info("%s does not exist yet - nothing to pick up", INCOMING_DIR)
+            return []
+
         # Filenames sort by arrival time, so "after the watermark" == "new".
         files = sorted(
-            f for f in hook.list_directory(INCOMING_DIR)
+            f for f in listing
             if f.endswith(".csv") and f > watermark
         )
 
@@ -66,8 +75,11 @@ def barclays_sftp_to_oracle_continuous():
 
         # One at a time, in order. Matters for the resume story below.
         for name in files:
-            contents = hook.read_file(f"{INCOMING_DIR}/{name}")
-            log.info("read %s (%s bytes)", name, len(contents))
+            # Just a stat - we deliberately do NOT pull file contents into the
+            # worker. The demo is about pickup and dedupe, and a real pipeline
+            # would stream this to its target rather than buffer it here.
+            modified = hook.get_mod_time(f"{INCOMING_DIR}/{name}")
+            log.info("picked up %s (modified %s)", name, modified)
 
             # Real pipeline would insert the rows right here.
 
