@@ -48,7 +48,7 @@ def self_healing_settlement_pipeline():
         assert set(rows[0]) == set(COLUMNS), f"Expected columns {COLUMNS}, got {list(rows[0])}"
         for row in rows:
             assert row["trade_id"], "Missing trade_id"
-            assert int(row["quanity"]) > 0, f"Bad quantity in {row['trade_id']}"
+            assert int(row["quantity"]) > 0, f"Bad quantity in {row['trade_id']}"
             assert float(row["price"]) > 0, f"Bad price in {row['trade_id']}"
         return rows
 
