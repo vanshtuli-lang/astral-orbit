@@ -1,71 +1,77 @@
 """
-### Minimal demo: durable=True on @task.agent
+### durable=True: the double-refund demo
 
-One agent, two tools:
-1. **roll_dice**   - returns a RANDOM number. Succeeds on every try.
-2. **save_roll**   - crashes on try 1 (after roll_dice already ran), works on try 2.
+An AI agent refunds a customer $1,200, then emails them. The email fails on the first try,
+**after the money has already been sent**, so Airflow retries the task.
 
-What to look for in the logs of try 2:
-- No ">>> LIVE CALL: roll_dice" line -> the tool result came from the cache.
-- save_roll prints the SAME number try 1 rolled -> nothing was re-run.
-- "Durable: replayed 3 cached steps (2 model, 1 tool), executed ..." summary line.
+The same agent runs twice. The only difference is `durable`:
 
-LLM calls: 3 in total (2 on try 1, 1 on try 2). Without durable it would be 5.
-Uses the `pydanticai_default` connection.
+- **durable=False**: the retry starts over and **refunds the customer again** ($2,400 sent).
+- **durable=True**: the retry replays the finished steps from the cache and only re-sends the email ($1,200 sent).
+
+Check the `summary` task log for the result. Trigger a new run to repeat the demo.
 """
 
-import random
+import uuid
 from datetime import timedelta
 
-from airflow.sdk import dag, get_current_context, task
+from airflow.sdk import Variable, dag, get_current_context, task
 from pendulum import datetime
 from pydantic_ai.toolsets import FunctionToolset
-from pydantic_ai.usage import UsageLimits
 
 
-def try_number() -> int:
-    return get_current_context()["ti"].try_number
+def _ti():
+    return get_current_context()["ti"]
 
 
-
-def roll_dice() -> int:
-    """Roll a 1,000,000-sided die."""
-    value = random.randint(1, 1_000_000)
-    print(f">>> LIVE CALL on try {try_number()}: roll_dice -> {value}")
-    return value
-
-
-def save_roll(value: int) -> str:
-    """Save the rolled value."""
-    print(f">>> LIVE CALL on try {try_number()}: save_roll({value})")
-    if try_number() == 1:
-        raise ConnectionError("Simulated crash after roll_dice succeeded")
-    return f"Saved {value}"
+def issue_refund(amount: float) -> str:
+    """Send a refund to the customer. Returns the refund ID."""
+    ti = _ti()
+    refund_id = f"RF-{uuid.uuid4().hex[:6].upper()}"
+    print(f">>> MONEY SENT: ${amount:,.0f} refund {refund_id} (try {ti.try_number})")
+    refunds = Variable.get(f"refunds_{ti.task_id}", default=[], deserialize_json=True)
+    Variable.set(f"refunds_{ti.task_id}", refunds + [refund_id], serialize_json=True)
+    return refund_id
 
 
-@dag(
-    start_date=datetime(2026, 10, 1),
-    schedule=None,
-    tags=["ai", "demo", "durable"],
-)
-def durable_agent_demo():
+def email_customer(refund_id: str) -> str:
+    """Email the customer about their refund."""
+    ti = _ti()
+    if ti.try_number == 1:
+        raise ConnectionError("Email server is down. Retrying task...")
+    print(f">>> EMAIL SENT for {refund_id} (try {ti.try_number})")
+    return "sent"
 
-    @task.agent(
+
+def refund_agent(durable: bool):
+    return task.agent(
+        task_id=f"refund_agent_durable_{durable}",
         llm_conn_id="pydanticai_default",
-        system_prompt=(
-            "Call roll_dice once. Then call save_roll once with that value. "
-            "Then reply with only the number."
-        ),
-        toolsets=[FunctionToolset(tools=[roll_dice, save_roll])],
-        usage_limits=UsageLimits(request_limit=4, total_tokens_limit=4_000),
-        durable=True,
+        system_prompt="Refund the customer $1200 with issue_refund, then call email_customer with the refund ID.",
+        toolsets=[FunctionToolset([issue_refund, email_customer], id="refund_tools", sequential=True)],
+        durable=durable,
         retries=1,
         retry_delay=timedelta(seconds=5),
-    )
-    def dice_agent() -> str:
-        return "Go."
+    )(lambda: "Process the refund.")
 
-    dice_agent()
+
+@dag(start_date=datetime(2026, 10, 1), schedule=None, doc_md=__doc__, tags=["ai", "demo", "durable"])
+def durable_agent_demo():
+
+    @task
+    def reset():
+        for durable in (False, True):
+            Variable.set(f"refunds_refund_agent_durable_{durable}", [], serialize_json=True)
+
+    @task(trigger_rule="all_done")
+    def summary():
+        print("=" * 60)
+        for durable in (False, True):
+            refunds = Variable.get(f"refunds_refund_agent_durable_{durable}", deserialize_json=True)
+            print(f"durable={durable!s:<5} -> refunded {len(refunds)}x = ${1200 * len(refunds):,}  {refunds}")
+        print("=" * 60)
+
+    reset() >> [refund_agent(durable=False)(), refund_agent(durable=True)()] >> summary()
 
 
 durable_agent_demo()
