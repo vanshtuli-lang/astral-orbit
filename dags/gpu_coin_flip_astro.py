@@ -94,9 +94,11 @@ def gpu_coin_flip_astro():
         arguments=[COIN_FLIP_SCRIPT],
         # The only GPU-specific setting: request whole GPUs. Astro detects the
         # nvidia.com/gpu request and places the Pod on a GPU node.
+        # Astro Hosted forces requests == limits for KPO Pods, and the cluster
+        # policy caps GPU Pods at 1.9 CPU / 11.1Gi memory, so keep both below that.
         container_resources=k8s.V1ResourceRequirements(
-            requests={"cpu": "2", "memory": "8Gi", "nvidia.com/gpu": "1"},
-            limits={"cpu": "3", "memory": "12Gi", "nvidia.com/gpu": "1"},
+            requests={"cpu": "1.5", "memory": "8Gi", "nvidia.com/gpu": "1"},
+            limits={"cpu": "1.5", "memory": "8Gi", "nvidia.com/gpu": "1"},
         ),
         in_cluster=True,
         get_logs=True,
