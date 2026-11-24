@@ -90,6 +90,10 @@ def consumer_daily():
     run()
 
 
+
+
+
+
 producer()
 consumer_both()
 consumer_either()
