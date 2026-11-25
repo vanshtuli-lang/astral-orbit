@@ -4,3 +4,10 @@ apache-airflow-providers-http==6.3.0
 apache-airflow-providers-sftp==6.0.1
 apache-airflow-providers-common-ai[openai,sql]==0.10.0
 apache-airflow-providers-cncf-kubernetes==11.0.0
+# fabric_trading_risk_demo
+apache-airflow-providers-microsoft-azure==15.4.0
+apache-airflow-providers-microsoft-fabric==0.1.1
+# fabric 0.1.1 imports wtforms/flask_appbuilder/flask_babel without declaring them;
+# on Airflow 3 those only come with the FAB provider.
+apache-airflow-providers-fab==3.11.1
+pyarrow==26.0.1
